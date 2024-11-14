@@ -5,11 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sashabaranov/go-openai"
 	"os"
 	"os/exec"
 	"strings"
-
-	"github.com/sashabaranov/go-openai"
 )
 
 // Step represents a single step in the response
@@ -90,7 +89,8 @@ func getStepsFromAI(prompt string) []Step {
 func main() {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("Welcome to CLI AI Assistant!")
-	fmt.Println("Type 'exit' to quit.")
+	fmt.Println("Type 'exit' to quit or 'cancel' during execution to submit a new query.")
+
 	for {
 		fmt.Print("\nEnter your query: ")
 		query, _ := reader.ReadString('\n')
@@ -115,14 +115,17 @@ func main() {
 			fmt.Println()
 		}
 
-		// Prompt user to execute commands
+		// Execute commands loop
 		for _, step := range steps {
 			if step.Command != "" {
-				fmt.Printf("Do you want to execute the command for Step %d? (yes/no): ", step.StepNumber)
+				fmt.Printf("Do you want to execute the command for Step %d? (yes/no/cancel): ", step.StepNumber)
 				choice, _ := reader.ReadString('\n')
 				choice = strings.TrimSpace(strings.ToLower(choice))
 
-				if choice == "yes" {
+				if choice == "cancel" {
+					fmt.Println("Command execution canceled. Returning to query submission.")
+					break
+				} else if choice == "yes" {
 					cmd := exec.Command("bash", "-c", step.Command)
 					cmd.Stdout = os.Stdout
 					cmd.Stderr = os.Stderr
