@@ -7,6 +7,8 @@
 - Execute commands interactively.
 - Save commands to a file for later use.
 
+![Go-Figure Logo](./assets/go-figure.webp)
+
 ## Requirements
 - Go 1.20 or later
 - OpenAI API Key
