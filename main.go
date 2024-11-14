@@ -4,14 +4,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"github.com/sashabaranov/go-openai"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/sashabaranov/go-openai"
 )
 
-// Step represents a single step in the response
 type Step struct {
 	StepNumber  int    `json:"step number"`
 	Description string `json:"description"`
@@ -19,7 +20,12 @@ type Step struct {
 	Command     string `json:"command"`
 }
 
-// Function to fetch AI response using OpenAI GPT
+// Supported modes
+const (
+	ModeExecute     = "execute"
+	ModeWriteToFile = "write-to-file"
+)
+
 func getStepsFromAI(prompt string) []Step {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -30,7 +36,6 @@ func getStepsFromAI(prompt string) []Step {
 	client := openai.NewClient(apiKey)
 	ctx := context.Background()
 
-	// Updated prompt with examples
 	aiPrompt := fmt.Sprintf(`
 		You are a Linux command assistant. Given the user's input, respond with a series of steps in JSON format.
 		Each step should include the step number, a description of the action, the reason for the action, and the command to execute if applicable.
@@ -75,7 +80,6 @@ func getStepsFromAI(prompt string) []Step {
 		os.Exit(1)
 	}
 
-	// Parse the JSON response into a list of Step structs
 	var steps []Step
 	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &steps)
 	if err != nil {
@@ -86,9 +90,52 @@ func getStepsFromAI(prompt string) []Step {
 	return steps
 }
 
+func handleCommand(mode, command string, outputFile *os.File) {
+	switch mode {
+	case ModeExecute:
+		fmt.Println("Executing:", command)
+		cmd := exec.Command("bash", "-c", command)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Error executing command: %s\n", err)
+		}
+	case ModeWriteToFile:
+		if outputFile != nil {
+			fmt.Fprintf(outputFile, "%s\n", command)
+		} else {
+			fmt.Println("Error: No file specified for write-to-file mode.")
+		}
+	default:
+		fmt.Println("Invalid mode. Skipping command.")
+	}
+}
+
 func main() {
+	// Parse flags for mode and file
+	mode := flag.String("mode", ModeExecute, "Mode of operation: execute or write-to-file")
+	outputFilePath := flag.String("file", "", "File path for write-to-file mode (optional)")
+	flag.Parse()
+
+	// Open the file if in write-to-file mode
+	var outputFile *os.File
+	var err error
+	if *mode == ModeWriteToFile {
+		if *outputFilePath == "" {
+			fmt.Println("Error: File path is required for write-to-file mode.")
+			os.Exit(1)
+		}
+		outputFile, err = os.OpenFile(*outputFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Printf("Error opening file: %s\n", err)
+			os.Exit(1)
+		}
+		defer outputFile.Close()
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("Welcome to CLI AI Assistant!")
+	fmt.Printf("Mode: %s\n", *mode)
 	fmt.Println("Type 'exit' to quit or 'cancel' during execution to submit a new query.")
 
 	for {
@@ -126,12 +173,7 @@ func main() {
 					fmt.Println("Command execution canceled. Returning to query submission.")
 					break
 				} else if choice == "yes" {
-					cmd := exec.Command("bash", "-c", step.Command)
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
-					if err := cmd.Run(); err != nil {
-						fmt.Printf("Error executing command: %s\n", err)
-					}
+					handleCommand(*mode, step.Command, outputFile)
 				} else {
 					fmt.Printf("Command for Step %d not executed.\n", step.StepNumber)
 				}
