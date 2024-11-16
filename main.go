@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -54,6 +55,48 @@ const (
 )
 
 // Helper Functions
+
+func executeCommand(command string) (string, error) {
+	cmd := exec.Command("bash", "-c", command)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+func handleQuery(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("in handle query")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fmt.Println("Error decoding JSON input:", err)
+		http.Error(w, "Invalid JSON input", http.StatusBadRequest)
+		return
+	}
+
+	fmt.Println("Query received:", req.Query)
+
+	steps := getStepsFromAI(req.Query)
+
+	response := QueryResponse{Steps: steps}
+	if len(steps) == 0 {
+		fmt.Println("No steps generated for query:", req.Query)
+		response.Error = "Failed to generate steps."
+	}
+
+	// Add to history
+	historyMutex.Lock()
+	history = append(history, HistoryEntry{Query: req.Query, Response: steps})
+	historyMutex.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		fmt.Println("Error encoding response JSON:", err)
+	}
+}
+
 func getStepsFromAI(prompt string) []Step {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -62,7 +105,10 @@ func getStepsFromAI(prompt string) []Step {
 	}
 
 	client := openai.NewClient(apiKey)
-	ctx := context.Background()
+
+	// Use context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	aiPrompt := fmt.Sprintf(`
 		You are a Linux command assistant. Given the user's input, respond with a series of steps in JSON format.
@@ -81,6 +127,7 @@ func getStepsFromAI(prompt string) []Step {
 
 		User input: %s`, prompt)
 
+	fmt.Println("Sending prompt to OpenAI API...")
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: openai.GPT4,
 		Messages: []openai.ChatCompletionMessage{
@@ -100,51 +147,24 @@ func getStepsFromAI(prompt string) []Step {
 		return []Step{}
 	}
 
+	fmt.Println("OpenAI API response received. Parsing...")
+
+	// Log the raw response for debugging
+	rawResponse := resp.Choices[0].Message.Content
+	fmt.Printf("Raw API Response: %s\n", rawResponse)
+
 	var steps []Step
-	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &steps)
+	err = json.Unmarshal([]byte(rawResponse), &steps)
 	if err != nil {
 		fmt.Printf("Error parsing response JSON: %v\n", err)
 		return []Step{}
 	}
 
+	fmt.Println("Parsed steps successfully:", steps)
 	return steps
 }
 
-func executeCommand(command string) (string, error) {
-	cmd := exec.Command("bash", "-c", command)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
-}
-
 // Handlers
-func handleQuery(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("in handle query")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req QueryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON input", http.StatusBadRequest)
-		return
-	}
-
-	steps := getStepsFromAI(req.Query)
-
-	response := QueryResponse{Steps: steps}
-	if len(steps) == 0 {
-		response.Error = "Failed to generate steps."
-	}
-
-	// Add to history
-	historyMutex.Lock()
-	history = append(history, HistoryEntry{Query: req.Query, Response: steps})
-	historyMutex.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
 
 func handleCommand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -190,13 +210,33 @@ func handleHistory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(history)
 	historyMutex.Unlock()
 }
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow CORS from any origin
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Handle preflight requests
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 func main() {
-	http.HandleFunc("/api/query", handleQuery)
-	http.HandleFunc("/api/command", handleCommand)
-	http.HandleFunc("/api/history", handleHistory)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/query", handleQuery)
+	mux.HandleFunc("/api/command", handleCommand)
+	mux.HandleFunc("/api/history", handleHistory)
+
+	// Wrap the mux with the CORS middleware
+	corsMux := enableCORS(mux)
 
 	port := ":8080"
 	fmt.Printf("Server running on http://localhost%s\n", port)
-	http.ListenAndServe(port, nil)
+	http.ListenAndServe(port, corsMux)
 }
