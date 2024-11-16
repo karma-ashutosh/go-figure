@@ -27,8 +27,8 @@ func main() {
 		return
 	}
 
-	mode := mode.Select()
-	fmt.Printf("Selected Mode: %s\n", mode)
+	selectMode := mode.Select()
+	fmt.Printf("Selected Mode: %s\n", selectMode)
 
 	steps := ai.GetStepsFromAI(query)
 	if len(steps) == 0 {
@@ -48,9 +48,9 @@ func main() {
 
 	history.Append(query, steps)
 
-	if mode == mode.ModeExecute {
+	if selectMode == mode.ModeExecute {
 		mode.ExecuteSteps(steps)
-	} else if mode == mode.ModeWriteToFile {
+	} else if selectMode == mode.ModeWriteToFile {
 		fmt.Println("Enter the file path to save commands:")
 		filePath, _ := reader.ReadString('\n')
 		filePath = strings.TrimSpace(filePath)
