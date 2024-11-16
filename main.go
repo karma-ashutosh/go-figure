@@ -1,31 +1,59 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
-	"strings"
+	"sync"
 
 	"github.com/sashabaranov/go-openai"
 )
 
+// Structs
 type Step struct {
-	StepNumber  int    `json:"step number"`
+	StepNumber  int    `json:"step"`
 	Description string `json:"description"`
 	Reason      string `json:"reason"`
 	Command     string `json:"command"`
 }
 
-// Supported modes
+type QueryRequest struct {
+	Query string `json:"query"`
+	Mode  string `json:"mode"` // "execute" or "write"
+}
+
+type QueryResponse struct {
+	Steps []Step `json:"steps"`
+	Error string `json:"error,omitempty"`
+}
+
+type CommandRequest struct {
+	Command string `json:"command"`
+}
+
+type CommandResponse struct {
+	Output string `json:"output"`
+	Error  string `json:"error,omitempty"`
+}
+
+type HistoryEntry struct {
+	Query    string `json:"query"`
+	Response []Step `json:"response"`
+}
+
+var history []HistoryEntry
+var historyMutex sync.Mutex
+
+// Modes
 const (
 	ModeExecute     = "execute"
 	ModeWriteToFile = "write-to-file"
 )
 
+// Helper Functions
 func getStepsFromAI(prompt string) []Step {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -51,14 +79,6 @@ func getStepsFromAI(prompt string) []Step {
 			{"step number": 2, "description": "Write 'Hello World' into the file", "reason": "To add the content to the file", "command": "echo 'Hello World' > hello.txt"}
 		]
 
-		Example 2:
-		User input: "List all files in the current directory and display the disk usage."
-		Response:
-		[
-			{"step number": 1, "description": "List all files in the current directory", "reason": "To view the contents of the directory", "command": "ls"},
-			{"step number": 2, "description": "Display disk usage for the files", "reason": "To understand how much space each file uses", "command": "du -h"}
-		]
-
 		User input: %s`, prompt)
 
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
@@ -77,107 +97,106 @@ func getStepsFromAI(prompt string) []Step {
 
 	if err != nil {
 		fmt.Printf("Error communicating with OpenAI API: %v\n", err)
-		os.Exit(1)
+		return []Step{}
 	}
 
 	var steps []Step
 	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &steps)
 	if err != nil {
 		fmt.Printf("Error parsing response JSON: %v\n", err)
-		os.Exit(1)
+		return []Step{}
 	}
 
 	return steps
 }
 
-func handleCommand(mode, command string, outputFile *os.File) {
-	switch mode {
-	case ModeExecute:
-		fmt.Println("Executing:", command)
-		cmd := exec.Command("bash", "-c", command)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("Error executing command: %s\n", err)
-		}
-	case ModeWriteToFile:
-		if outputFile != nil {
-			fmt.Fprintf(outputFile, "%s\n", command)
-		} else {
-			fmt.Println("Error: No file specified for write-to-file mode.")
-		}
-	default:
-		fmt.Println("Invalid mode. Skipping command.")
+func executeCommand(command string) (string, error) {
+	cmd := exec.Command("bash", "-c", command)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// Handlers
+func handleQuery(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("in handle query")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	var req QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON input", http.StatusBadRequest)
+		return
+	}
+
+	steps := getStepsFromAI(req.Query)
+
+	response := QueryResponse{Steps: steps}
+	if len(steps) == 0 {
+		response.Error = "Failed to generate steps."
+	}
+
+	// Add to history
+	historyMutex.Lock()
+	history = append(history, HistoryEntry{Query: req.Query, Response: steps})
+	historyMutex.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON input", http.StatusBadRequest)
+		return
+	}
+
+	if req.Command == "" {
+		http.Error(w, "No command provided", http.StatusBadRequest)
+		return
+	}
+
+	output, err := executeCommand(req.Command)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CommandResponse{
+			Output: output,
+			Error:  err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CommandResponse{
+		Output: output,
+	})
+}
+
+func handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	historyMutex.Lock()
+	json.NewEncoder(w).Encode(history)
+	historyMutex.Unlock()
 }
 
 func main() {
-	// Parse flags for mode and file
-	mode := flag.String("mode", ModeExecute, "Mode of operation: execute or write-to-file")
-	outputFilePath := flag.String("file", "", "File path for write-to-file mode (optional)")
-	flag.Parse()
+	http.HandleFunc("/api/query", handleQuery)
+	http.HandleFunc("/api/command", handleCommand)
+	http.HandleFunc("/api/history", handleHistory)
 
-	// Open the file if in write-to-file mode
-	var outputFile *os.File
-	var err error
-	if *mode == ModeWriteToFile {
-		if *outputFilePath == "" {
-			fmt.Println("Error: File path is required for write-to-file mode.")
-			os.Exit(1)
-		}
-		outputFile, err = os.OpenFile(*outputFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Printf("Error opening file: %s\n", err)
-			os.Exit(1)
-		}
-		defer outputFile.Close()
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("Welcome to CLI AI Assistant!")
-	fmt.Printf("Mode: %s\n", *mode)
-	fmt.Println("Type 'exit' to quit or 'cancel' during execution to submit a new query.")
-
-	for {
-		fmt.Print("\nEnter your query: ")
-		query, _ := reader.ReadString('\n')
-		query = strings.TrimSpace(query)
-
-		if strings.ToLower(query) == "exit" {
-			fmt.Println("Goodbye!")
-			break
-		}
-
-		// Get steps suggestion from AI
-		steps := getStepsFromAI(query)
-
-		// Display the steps to the user
-		fmt.Println("\nSuggested Steps:")
-		for _, step := range steps {
-			fmt.Printf("Step %d: %s\n", step.StepNumber, step.Description)
-			fmt.Printf("Reason: %s\n", step.Reason)
-			if step.Command != "" {
-				fmt.Printf("Command: %s\n", step.Command)
-			}
-			fmt.Println()
-		}
-
-		// Execute commands loop
-		for _, step := range steps {
-			if step.Command != "" {
-				fmt.Printf("Do you want to execute the command for Step %d? (yes/no/cancel): ", step.StepNumber)
-				choice, _ := reader.ReadString('\n')
-				choice = strings.TrimSpace(strings.ToLower(choice))
-
-				if choice == "cancel" {
-					fmt.Println("Command execution canceled. Returning to query submission.")
-					break
-				} else if choice == "yes" {
-					handleCommand(*mode, step.Command, outputFile)
-				} else {
-					fmt.Printf("Command for Step %d not executed.\n", step.StepNumber)
-				}
-			}
-		}
-	}
+	port := ":8080"
+	fmt.Printf("Server running on http://localhost%s\n", port)
+	http.ListenAndServe(port, nil)
 }

@@ -1,2 +1,3 @@
+#bash
 go mod tidy
-go build -o go-figure main.go
+go build -o bin/go-figure main.go
