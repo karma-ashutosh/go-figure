@@ -1,9 +1,8 @@
 package history
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
+	"strings"
 	"sync"
 
 	"go-figure/ai"
@@ -19,39 +18,39 @@ var (
 	historyMutex sync.Mutex
 )
 
+// Append adds a new entry to the history
 func Append(query string, steps []ai.Step) {
 	historyMutex.Lock()
 	defer historyMutex.Unlock()
 	history = append(history, HistoryEntry{Query: query, Response: steps})
 }
 
-func Display() {
+// GetHistory formats the history for display
+func GetHistory() string {
 	historyMutex.Lock()
 	defer historyMutex.Unlock()
 
 	if len(history) == 0 {
-		fmt.Println("No history available.")
-		return
+		return "No history available."
 	}
 
+	var sb strings.Builder
 	for i, entry := range history {
-		fmt.Printf("Query %d: %s\n", i+1, entry.Query)
+		sb.WriteString(fmt.Sprintf("Query %d: %s\n", i+1, entry.Query))
 		for _, step := range entry.Response {
-			fmt.Printf("  Step %d: %s\n", step.StepNumber, step.Description)
+			sb.WriteString(fmt.Sprintf("  Step %d: %s\n", step.StepNumber, step.Description))
+			sb.WriteString(fmt.Sprintf("    Reason: %s\n", step.Reason))
+			if step.Command != "" {
+				sb.WriteString(fmt.Sprintf("    Command: %s\n", step.Command))
+			}
+			sb.WriteString("\n")
 		}
-		fmt.Println()
+		sb.WriteString("\n")
 	}
+	return sb.String()
 }
 
-func SaveToFile(filePath string) error {
-	historyMutex.Lock()
-	defer historyMutex.Unlock()
-
-	file, err := os.Create(filePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	return json.NewEncoder(file).Encode(history)
+// Display prints the history to the terminal (for CLI mode)
+func Display() {
+	fmt.Println(GetHistory())
 }
