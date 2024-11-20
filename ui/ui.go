@@ -65,37 +65,46 @@ func (m teaModel) Init() tea.Cmd {
 }
 
 func (m teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// fmt.Println("Got msg %s", msg)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		// Handle quitting the program
 		case "ctrl+c", "q":
 			return m, tea.Quit
+
+		// Handle Enter key
 		case "enter":
+			// fmt.Println("handling enter")
 			return m.handleEnter()
+
+		// Handle backspace for text inputs
 		case "backspace":
 			if m.currentScreen == screenQuery || m.currentScreen == screenMode {
 				var cmd tea.Cmd
 				m.textInput, cmd = m.textInput.Update(msg)
 				return m, cmd
 			}
+
+		// Handle navigation keys for text input or list
 		default:
 			if m.currentScreen == screenQuery || m.currentScreen == screenMode {
+				// Update text input
 				var cmd tea.Cmd
 				m.textInput, cmd = m.textInput.Update(msg)
 				return m, cmd
+			} else if m.currentScreen == screenMenu {
+				// Update list navigation
+				var cmd tea.Cmd
+				m.list, cmd = m.list.Update(msg)
+				return m, cmd
 			}
-		}
-
-		// Allow list navigation for the menu
-		if m.currentScreen == screenMenu {
-			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
-			return m, cmd
 		}
 	}
 
 	return m, nil
 }
+
 
 func (m teaModel) View() string {
 	switch m.currentScreen {
@@ -115,8 +124,31 @@ func (m teaModel) View() string {
 }
 
 func (m *teaModel) handleEnter() (tea.Model, tea.Cmd) {
+	// fmt.Println("cur screen ", m.currentScreen)
+
 	switch m.currentScreen {
+	case screenMenu:
+		// Get the selected item from the menu
+		item := m.list.SelectedItem()
+		if item == nil {
+			m.errorMessage = "No item selected."
+			return m, nil
+		}
+		selected := item.(listItem).name
+
+		// Transition based on the selected menu item
+		switch selected {
+		case "Query Assistance":
+			m.currentScreen = screenQuery
+			m.textInput.Reset()
+		case "History":
+			m.currentScreen = screenHistory
+		default:
+			m.errorMessage = "Invalid menu option selected."
+		}
+
 	case screenQuery:
+		// Handle query input
 		m.query = strings.TrimSpace(m.textInput.Value())
 		if m.query == "" {
 			m.errorMessage = "Query cannot be empty."
@@ -124,7 +156,9 @@ func (m *teaModel) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.currentScreen = screenMode
 		m.textInput.Reset()
+
 	case screenMode:
+		// Handle mode input
 		m.selectMode = strings.ToLower(strings.TrimSpace(m.textInput.Value()))
 		if m.selectMode != mode.ModeExecute && m.selectMode != mode.ModeWriteToFile {
 			m.errorMessage = "Invalid mode. Choose 'execute' or 'write-to-file'."
@@ -135,12 +169,17 @@ func (m *teaModel) handleEnter() (tea.Model, tea.Cmd) {
 			m.errorMessage = "No steps found for your query."
 			return m, nil
 		}
-		// Add the query and steps to history
 		history.Append(m.query, m.steps)
 		m.currentScreen = screenSteps
+
+	case screenHistory:
+		// Handle exiting history screen (optional)
+		m.currentScreen = screenMenu
 	}
+
 	return m, nil
 }
+
 
 func (m teaModel) viewQueryScreen() string {
 	return fmt.Sprintf(
