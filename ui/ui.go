@@ -31,6 +31,7 @@ type teaModel struct {
 	steps         []ai.Step
 	historyView   string
 	errorMessage  string
+	loading 	  bool
 }
 
 func InitialModel() teaModel {
@@ -100,35 +101,19 @@ func (m teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		}
+	case stepsMsg:
+		return m.handleStepsResponse(msg)
 	}
 
 	return m, nil
 }
 
-
-func (m teaModel) View() string {
-	switch m.currentScreen {
-	case screenMenu:
-		return m.list.View()
-	case screenQuery:
-		return m.viewQueryScreen()
-	case screenMode:
-		return m.viewModeScreen()
-	case screenSteps:
-		return m.viewStepsScreen()
-	case screenHistory:
-		return m.viewHistoryScreen()
-	default:
-		return "Unknown screen. Press 'q' to quit."
-	}
-}
-
 func (m *teaModel) handleEnter() (tea.Model, tea.Cmd) {
-	// fmt.Println("cur screen ", m.currentScreen)
+	fmt.Printf("Handling Enter on screen: %s\n", m.currentScreen)
 
 	switch m.currentScreen {
 	case screenMenu:
-		// Get the selected item from the menu
+		// Handle menu selection
 		item := m.list.SelectedItem()
 		if item == nil {
 			m.errorMessage = "No item selected."
@@ -136,7 +121,6 @@ func (m *teaModel) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		selected := item.(listItem).name
 
-		// Transition based on the selected menu item
 		switch selected {
 		case "Query Assistance":
 			m.currentScreen = screenQuery
@@ -158,25 +142,73 @@ func (m *teaModel) handleEnter() (tea.Model, tea.Cmd) {
 		m.textInput.Reset()
 
 	case screenMode:
-		// Handle mode input
+		// Handle mode selection
 		m.selectMode = strings.ToLower(strings.TrimSpace(m.textInput.Value()))
 		if m.selectMode != mode.ModeExecute && m.selectMode != mode.ModeWriteToFile {
 			m.errorMessage = "Invalid mode. Choose 'execute' or 'write-to-file'."
 			return m, nil
 		}
-		m.steps = ai.GetStepsFromAI(m.query)
-		if len(m.steps) == 0 {
-			m.errorMessage = "No steps found for your query."
-			return m, nil
-		}
-		history.Append(m.query, m.steps)
-		m.currentScreen = screenSteps
 
-	case screenHistory:
-		// Handle exiting history screen (optional)
-		m.currentScreen = screenMenu
+		// Set loading state and fetch steps
+		m.loading = true
+		return m, m.fetchSteps()
+
+	case screenSteps:
+		// Handle execution or quitting from steps
+		if m.selectMode == mode.ModeExecute {
+			mode.ExecuteSteps(m.steps)
+		} else if m.selectMode == mode.ModeWriteToFile {
+			fmt.Println("Saving steps to a file...")
+			// Add file saving logic
+		}
+		return m, tea.Quit
 	}
 
+	return m, nil
+}
+
+
+func (m *teaModel) fetchSteps() tea.Cmd {
+	return func() tea.Msg {
+		steps := ai.GetStepsFromAI(m.query)
+		return stepsMsg{steps: steps}
+	}
+}
+func (m teaModel) View() string {
+	if m.loading {
+		return "Querying AI... Please wait.\n\nPress 'q' to quit."
+	}
+
+	switch m.currentScreen {
+	case screenMenu:
+		return m.list.View()
+	case screenQuery:
+		return "Query Assistance\n\nEnter your query below:\n" + m.textInput.View()
+	case screenMode:
+		return "Choose Execution Mode:\n- execute\n- write-to-file\n\n" + m.textInput.View()
+	case screenSteps:
+		return m.viewStepsScreen()
+	case screenHistory:
+		return "Command History:\n" + m.historyView
+	default:
+		return "Unknown screen. Press 'q' to quit."
+	}
+}
+
+// Custom message type for handling steps response
+type stepsMsg struct {
+	steps []ai.Step
+}
+func (m *teaModel) handleStepsResponse(msg stepsMsg) (tea.Model, tea.Cmd) {
+	m.loading = false
+
+	if len(msg.steps) == 0 {
+		m.errorMessage = "No steps found for your query."
+		return m, nil
+	}
+
+	m.steps = msg.steps
+	m.currentScreen = screenSteps
 	return m, nil
 }
 

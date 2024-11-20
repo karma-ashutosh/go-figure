@@ -36,6 +36,7 @@ func GetStepsFromAI(prompt string) []Step {
 
 		User input: %s`, prompt)
 
+	fmt.Println("Sending query to OpenAI...")
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: openai.GPT4,
 		Messages: []openai.ChatCompletionMessage{
@@ -55,12 +56,16 @@ func GetStepsFromAI(prompt string) []Step {
 		return []Step{}
 	}
 
+	fmt.Println("OpenAI response received. Parsing response...")
+
 	var steps []Step
 	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &steps)
 	if err != nil {
 		fmt.Printf("Error parsing response JSON: %v\n", err)
+		fmt.Println("Raw response content:", resp.Choices[0].Message.Content)
 		return []Step{}
 	}
 
+	fmt.Printf("Parsed %d steps from AI response.\n", len(steps))
 	return steps
 }
