@@ -34,6 +34,8 @@ func GetStepsFromAI(prompt string) []Step {
 		You are a Linux command assistant. Given the user's input, respond with a series of steps in JSON format.
 		Each step should include the step number, a description of the action, the reason for the action, and the command to execute if applicable.
 
+		Respond ONLY with the JSON object containing the "steps" key.
+
 		User input: %s`, prompt)
 
 	fmt.Println("Sending query to OpenAI...")
@@ -58,14 +60,18 @@ func GetStepsFromAI(prompt string) []Step {
 
 	fmt.Println("OpenAI response received. Parsing response...")
 
-	var steps []Step
-	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &steps)
+	// Define a wrapper struct to match the response structure
+	var response struct {
+		Steps []Step `json:"steps"`
+	}
+
+	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &response)
 	if err != nil {
 		fmt.Printf("Error parsing response JSON: %v\n", err)
 		fmt.Println("Raw response content:", resp.Choices[0].Message.Content)
 		return []Step{}
 	}
 
-	fmt.Printf("Parsed %d steps from AI response.\n", len(steps))
-	return steps
+	fmt.Printf("Parsed %d steps from AI response.\n", len(response.Steps))
+	return response.Steps
 }
