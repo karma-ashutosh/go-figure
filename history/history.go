@@ -1,8 +1,9 @@
 package history
 
 import (
+	"encoding/json"
 	"fmt"
-	"strings"
+	"os"
 	"sync"
 
 	"go-figure/ai"
@@ -16,16 +17,16 @@ type HistoryEntry struct {
 var (
 	history      []HistoryEntry
 	historyMutex sync.Mutex
+	filePath     = "history.json"
 )
 
-// Append adds a new entry to the history
 func Append(query string, steps []ai.Step) {
 	historyMutex.Lock()
 	defer historyMutex.Unlock()
 	history = append(history, HistoryEntry{Query: query, Response: steps})
+	saveToFile()
 }
 
-// GetHistory formats the history for display
 func GetHistory() string {
 	historyMutex.Lock()
 	defer historyMutex.Unlock()
@@ -34,23 +35,39 @@ func GetHistory() string {
 		return "No history available."
 	}
 
-	var sb strings.Builder
+	var result string
 	for i, entry := range history {
-		sb.WriteString(fmt.Sprintf("Query %d: %s\n", i+1, entry.Query))
+		result += fmt.Sprintf("Query %d: %s\n", i+1, entry.Query)
 		for _, step := range entry.Response {
-			sb.WriteString(fmt.Sprintf("  Step %d: %s\n", step.StepNumber, step.Description))
-			sb.WriteString(fmt.Sprintf("    Reason: %s\n", step.Reason))
-			if step.Command != "" {
-				sb.WriteString(fmt.Sprintf("    Command: %s\n", step.Command))
-			}
-			sb.WriteString("\n")
+			result += fmt.Sprintf("  Step %d: %s\n", step.StepNumber, step.Description)
 		}
-		sb.WriteString("\n")
+		result += "\n"
 	}
-	return sb.String()
+	return result
 }
 
-// Display prints the history to the terminal (for CLI mode)
-func Display() {
-	fmt.Println(GetHistory())
+func saveToFile() {
+	file, err := os.Create(filePath)
+	if err != nil {
+		fmt.Printf("Error saving history: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	data, _ := json.MarshalIndent(history, "", "  ")
+	file.Write(data)
+}
+
+func loadFromFile() {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	json.NewDecoder(file).Decode(&history)
+}
+
+func init() {
+	loadFromFile()
 }
